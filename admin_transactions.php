@@ -5,6 +5,8 @@ define('ALLOW_ACCESS', true);
 require_once __DIR__ . '/includes/db_config.php';
 require_once __DIR__ . '/includes/function.php';
 
+// Session sudah dimulai di function.php
+
 // Protect route: allow only admin
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
     header('Location: login.php');
@@ -16,6 +18,11 @@ $admin_username = $_SESSION['username'];
 
 $message = '';
 $message_type = '';
+
+// Get filter parameters - HARUS didefinisikan sebelum digunakan
+$filter_kelas = isset($_GET['kelas']) ? intval($_GET['kelas']) : 0;
+$filter_jenis = isset($_GET['jenis']) ? $_GET['jenis'] : '';
+$filter_bulan = isset($_GET['bulan']) ? $_GET['bulan'] : '';
 
 // Check for message from URL parameters (for redirects)
 if (isset($_GET['message']) && isset($_GET['message_type'])) {
@@ -74,47 +81,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_transaction'])) {
                 
                 if ($insert_stmt = mysqli_prepare($conn, $insert_sql)) {
                     mysqli_stmt_bind_param($insert_stmt, 'isdssi', $id_kas, $jenis, $jumlah, $tanggal, $deskripsi, $admin_id);
-                    
-                    if (!mysqli_stmt_execute($insert_stmt)) {
-    die("Error Insert: " . mysqli_stmt_error($insert_stmt));
-}
+
                     if (mysqli_stmt_execute($insert_stmt)) {
-                        // Verifikasi saldo terupdate oleh trigger
-                        $saldo_sql = "SELECT saldo FROM kas WHERE id_kas = ?";
-                        if ($saldo_stmt = mysqli_prepare($conn, $saldo_sql)) {
-                            mysqli_stmt_bind_param($saldo_stmt, 'i', $id_kas);
-                            mysqli_stmt_execute($saldo_stmt);
-                            $saldo_result = mysqli_stmt_get_result($saldo_stmt);
-                            $saldo_baru = mysqli_fetch_assoc($saldo_result)['saldo'];
-                            mysqli_stmt_close($saldo_stmt);
+                        $last_id = mysqli_insert_id($conn); // Dapatkan ID transaksi terakhir
+                        
+                        // Debug: Cek apakah transaksi berhasil dibuat
+                        $check_sql = "SELECT * FROM transaksi WHERE id_transaksi = ?";
+                        if ($check_stmt = mysqli_prepare($conn, $check_sql)) {
+                            mysqli_stmt_bind_param($check_stmt, 'i', $last_id);
+                            mysqli_stmt_execute($check_stmt);
+                            $check_result = mysqli_stmt_get_result($check_stmt);
                             
-                            $redirect_url = "admin_transactions.php?message=" . urlencode("Transaksi berhasil ditambahkan! Saldo: " . format_rupiah($saldo_baru)) . "&message_type=success";
-                            
-                            // Pertahankan filter
-                            if (isset($_GET['kelas']) && $_GET['kelas'] != 0) {
-                                $redirect_url .= "&kelas=" . $_GET['kelas'];
+                            if (mysqli_num_rows($check_result) > 0) {
+                                // Transaksi berhasil dibuat
+                                $message = "Transaksi berhasil ditambahkan! ID: " . $last_id;
+                                $message_type = 'success';
+                                
+                                // Redirect dengan parameter
+                                $redirect_url = "admin_transactions.php?message=" . urlencode("Transaksi berhasil ditambahkan!") . "&message_type=success";
+                                if ($filter_kelas > 0) {
+                                    $redirect_url .= "&kelas=" . $filter_kelas;
+                                }
+                                header("Location: " . $redirect_url);
+                                exit;
+                            } else {
+                                $message = "Transaksi gagal dibuat di database";
+                                $message_type = 'danger';
                             }
-                            if (isset($_GET['jenis']) && !empty($_GET['jenis'])) {
-                                $redirect_url .= "&jenis=" . urlencode($_GET['jenis']);
-                            }
-                            if (isset($_GET['bulan']) && !empty($_GET['bulan'])) {
-                                $redirect_url .= "&bulan=" . urlencode($_GET['bulan']);
-                            }
-                            
-                            header("Location: " . $redirect_url);
-                            exit;
+                            mysqli_stmt_close($check_stmt);
                         }
                     } else {
                         $message = "Gagal menyimpan transaksi: " . mysqli_error($conn);
                         $message_type = 'danger';
                     }
                     mysqli_stmt_close($insert_stmt);
+                } else {
+                    $message = "Gagal mempersiapkan query insert: " . mysqli_error($conn);
+                    $message_type = 'danger';
                 }
             } else {
                 $message = "Kelas tidak ditemukan atau bukan milik Anda";
                 $message_type = 'danger';
             }
             mysqli_stmt_close($stmt);
+        } else {
+            $message = "Gagal mempersiapkan query: " . mysqli_error($conn);
+            $message_type = 'danger';
         }
     } else {
         $message = "Validasi gagal: " . implode(", ", $errors);
@@ -153,11 +165,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_transaction'])
         mysqli_stmt_close($stmt);
     }
 }
-
-// Get filter parameters
-$filter_kelas = isset($_GET['kelas']) ? intval($_GET['kelas']) : 0;
-$filter_jenis = isset($_GET['jenis']) ? $_GET['jenis'] : '';
-$filter_bulan = isset($_GET['bulan']) ? $_GET['bulan'] : '';
 
 // Get all transactions with kas saldo
 $transactions = [];
@@ -492,7 +499,7 @@ include 'includes/admin_header.php';
                 <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Tambah Transaksi</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" id="addTransactionForm">
+            <form method="POST" action="admin_transactions.php" id="addTransactionForm">
                 <div class="modal-body">
                     <?php if (empty($classes)): ?>
                         <div class="alert alert-warning">
@@ -539,7 +546,8 @@ include 'includes/admin_header.php';
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
                     <?php if (!empty($classes)): ?>
-                        <button type="submit" name="add_transaction" class="btn kas-btn kas-btn-primary">
+                        <input type="hidden" name="add_transaction" value="1">
+                        <button type="submit" name="add_transaction" value="1" class="btn btn-primary">
                             <i class="bi bi-check-circle me-2"></i>Simpan Transaksi
                         </button>
                     <?php endif; ?>
