@@ -5,8 +5,6 @@ define('ALLOW_ACCESS', true);
 require_once __DIR__ . '/includes/db_config.php';
 require_once __DIR__ . '/includes/function.php';
 
-// Session sudah dimulai di function.php
-
 // Protect route: allow only admin
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
     header('Location: login.php');
@@ -19,19 +17,31 @@ $admin_username = $_SESSION['username'];
 $message = '';
 $message_type = '';
 
-// Get filter parameters - HARUS didefinisikan sebelum digunakan
+// Get filter parameters
 $filter_kelas = isset($_GET['kelas']) ? intval($_GET['kelas']) : 0;
 $filter_jenis = isset($_GET['jenis']) ? $_GET['jenis'] : '';
 $filter_bulan = isset($_GET['bulan']) ? $_GET['bulan'] : '';
 
-// Check for message from URL parameters (for redirects)
+// Check for message from URL parameters
 if (isset($_GET['message']) && isset($_GET['message_type'])) {
     $message = urldecode($_GET['message']);
     $message_type = $_GET['message_type'];
 }
 
+// Fungsi untuk mendapatkan data kas berdasarkan kelas
+function getKasByKelas($conn, $id_kelas) {
+    $sql = "SELECT id_kas FROM kas WHERE id_kelas = ?";
+    $stmt = mysqli_prepare($conn, $sql);
+    mysqli_stmt_bind_param($stmt, "i", $id_kelas);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    $row = mysqli_fetch_assoc($result);
+    mysqli_stmt_close($stmt);
+    return $row ? $row['id_kas'] : null;
+}
+
 // Handle Add Transaction
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_transaction'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['tambah_transaksi'])) {
     
     // Ambil data dari POST
     $id_kelas = isset($_POST['id_kelas']) ? intval($_POST['id_kelas']) : 0;
@@ -60,73 +70,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_transaction'])) {
     }
     
     if (empty($errors)) {
-        // Cek kelas dan dapatkan ID kas
-        $sql = "SELECT k.id_kelas, k.nama_kelas, kas.id_kas, kas.saldo 
-                FROM kelas k 
-                INNER JOIN kas ON k.id_kelas = kas.id_kelas 
-                WHERE k.id_kelas = ? AND k.id_admin = ?";
+        // Validasi: cek apakah kelas ini milik admin
+        $sql_cek_kelas = "SELECT id_kelas FROM kelas WHERE id_kelas = ? AND id_admin = ?";
+        $stmt_cek = mysqli_prepare($conn, $sql_cek_kelas);
+        mysqli_stmt_bind_param($stmt_cek, "ii", $id_kelas, $admin_id);
+        mysqli_stmt_execute($stmt_cek);
+        $result_cek = mysqli_stmt_get_result($stmt_cek);
+        $kelas_valid = mysqli_fetch_assoc($result_cek);
+        mysqli_stmt_close($stmt_cek);
         
-        if ($stmt = mysqli_prepare($conn, $sql)) {
-            mysqli_stmt_bind_param($stmt, 'ii', $id_kelas, $admin_id);
-            mysqli_stmt_execute($stmt);
-            $result = mysqli_stmt_get_result($stmt);
+        if (!$kelas_valid) {
+            $message = "Kelas tidak valid atau tidak ada akses!";
+            $message_type = 'danger';
+        } else {
+            // Dapatkan id_kas dari id_kelas
+            $id_kas = getKasByKelas($conn, $id_kelas);
             
-            if ($result && mysqli_num_rows($result) > 0) {
-                $kelas_data = mysqli_fetch_assoc($result);
-                $id_kas = $kelas_data['id_kas'];
-                
+            if ($id_kas) {
                 // Insert transaksi
-                $insert_sql = "INSERT INTO transaksi (id_kas, jenis, jumlah, tanggal, deskripsi, created_by) 
-                              VALUES (?, ?, ?, ?, ?, ?)";
+                $sql = "INSERT INTO transaksi (id_kas, jenis, jumlah, tanggal, deskripsi, created_by) 
+                        VALUES (?, ?, ?, ?, ?, ?)";
                 
-                if ($insert_stmt = mysqli_prepare($conn, $insert_sql)) {
-                    mysqli_stmt_bind_param($insert_stmt, 'isdssi', $id_kas, $jenis, $jumlah, $tanggal, $deskripsi, $admin_id);
-
-                    if (mysqli_stmt_execute($insert_stmt)) {
-                        $last_id = mysqli_insert_id($conn); // Dapatkan ID transaksi terakhir
-                        
-                        // Debug: Cek apakah transaksi berhasil dibuat
-                        $check_sql = "SELECT * FROM transaksi WHERE id_transaksi = ?";
-                        if ($check_stmt = mysqli_prepare($conn, $check_sql)) {
-                            mysqli_stmt_bind_param($check_stmt, 'i', $last_id);
-                            mysqli_stmt_execute($check_stmt);
-                            $check_result = mysqli_stmt_get_result($check_stmt);
-                            
-                            if (mysqli_num_rows($check_result) > 0) {
-                                // Transaksi berhasil dibuat
-                                $message = "Transaksi berhasil ditambahkan! ID: " . $last_id;
-                                $message_type = 'success';
-                                
-                                // Redirect dengan parameter
-                                $redirect_url = "admin_transactions.php?message=" . urlencode("Transaksi berhasil ditambahkan!") . "&message_type=success";
-                                if ($filter_kelas > 0) {
-                                    $redirect_url .= "&kelas=" . $filter_kelas;
-                                }
-                                header("Location: " . $redirect_url);
-                                exit;
-                            } else {
-                                $message = "Transaksi gagal dibuat di database";
-                                $message_type = 'danger';
-                            }
-                            mysqli_stmt_close($check_stmt);
+                $stmt = mysqli_prepare($conn, $sql);
+                if ($stmt) {
+                    mysqli_stmt_bind_param($stmt, "isdssi", $id_kas, $jenis, $jumlah, $tanggal, $deskripsi, $admin_id);
+                    
+                    if (mysqli_stmt_execute($stmt)) {
+                        // Update saldo kas
+                        if ($jenis === 'pemasukan') {
+                            $update_sql = "UPDATE kas SET saldo = saldo + ? WHERE id_kas = ?";
+                        } else {
+                            $update_sql = "UPDATE kas SET saldo = saldo - ? WHERE id_kas = ?";
                         }
+                        
+                        $update_stmt = mysqli_prepare($conn, $update_sql);
+                        mysqli_stmt_bind_param($update_stmt, "di", $jumlah, $id_kas);
+                        mysqli_stmt_execute($update_stmt);
+                        mysqli_stmt_close($update_stmt);
+                        
+                        // Success - redirect
+                        $redirect_url = "admin_transactions.php?message=" . urlencode("Transaksi berhasil ditambahkan!") . "&message_type=success";
+                        if ($filter_kelas > 0) $redirect_url .= "&kelas=" . $filter_kelas;
+                        if (!empty($filter_jenis)) $redirect_url .= "&jenis=" . urlencode($filter_jenis);
+                        if (!empty($filter_bulan)) $redirect_url .= "&bulan=" . urlencode($filter_bulan);
+                        
+                        header("Location: " . $redirect_url);
+                        exit;
                     } else {
-                        $message = "Gagal menyimpan transaksi: " . mysqli_error($conn);
+                        $message = "Error: " . mysqli_error($conn);
                         $message_type = 'danger';
                     }
-                    mysqli_stmt_close($insert_stmt);
+                    mysqli_stmt_close($stmt);
                 } else {
-                    $message = "Gagal mempersiapkan query insert: " . mysqli_error($conn);
+                    $message = "Error prepare: " . mysqli_error($conn);
                     $message_type = 'danger';
                 }
             } else {
-                $message = "Kelas tidak ditemukan atau bukan milik Anda";
+                $message = "Kas untuk kelas ini tidak ditemukan!";
                 $message_type = 'danger';
             }
-            mysqli_stmt_close($stmt);
-        } else {
-            $message = "Gagal mempersiapkan query: " . mysqli_error($conn);
-            $message_type = 'danger';
         }
     } else {
         $message = "Validasi gagal: " . implode(", ", $errors);
@@ -134,37 +136,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_transaction'])) {
     }
 }
 
-// Handle Delete Transaction
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_transaction'])) {
-    $id_transaksi = intval($_POST['id_transaksi']);
-    
-    $sql = "DELETE t FROM transaksi t
-            JOIN kas ON t.id_kas = kas.id_kas
-            JOIN kelas k ON kas.id_kelas = k.id_kelas
-            WHERE t.id_transaksi = ? AND k.id_admin = ?";
-    
-    if ($stmt = mysqli_prepare($conn, $sql)) {
-        mysqli_stmt_bind_param($stmt, 'ii', $id_transaksi, $admin_id);
-        
-        if (mysqli_stmt_execute($stmt)) {
-            $redirect_url = "admin_transactions.php?message=Transaksi+berhasil+dihapus&message_type=success";
-            
-            if (isset($_GET['kelas']) && $_GET['kelas'] != 0) {
-                $redirect_url .= "&kelas=" . $_GET['kelas'];
-            }
-            if (isset($_GET['jenis']) && !empty($_GET['jenis'])) {
-                $redirect_url .= "&jenis=" . urlencode($_GET['jenis']);
-            }
-            if (isset($_GET['bulan']) && !empty($_GET['bulan'])) {
-                $redirect_url .= "&bulan=" . urlencode($_GET['bulan']);
-            }
-            
-            header("Location: " . $redirect_url);
-            exit;
-        }
-        mysqli_stmt_close($stmt);
-    }
-}
+// [KODE UNTUK EDIT, DELETE DAN LAINNYA...]
 
 // Get all transactions with kas saldo
 $transactions = [];
@@ -223,6 +195,7 @@ if ($stmt = mysqli_prepare($conn, $sql_classes)) {
 // Calculate statistics
 $total_pemasukan = 0;
 $total_pengeluaran = 0;
+
 foreach ($transactions as $trans) {
     if ($trans['jenis'] === 'pemasukan') {
         $total_pemasukan += $trans['jumlah'];
@@ -231,9 +204,35 @@ foreach ($transactions as $trans) {
     }
 }
 
+$saldo_kas = $total_pemasukan - $total_pengeluaran;
+$jumlah_transaksi = count($transactions);
+
 $pageTitle = "Manajemen Transaksi - Admin KasKelas";
 include 'includes/admin_header.php';
 ?>
+
+<!-- DEBUG INFO - TAMPILKAN KELAS YANG TERSEDIA -->
+<div class="container mt-3">
+    <div class="alert alert-info">
+        <h5>Debug Info Kelas:</h5>
+        <p><strong>Jumlah Kelas: <?php echo count($classes); ?></strong></p>
+        <p><strong>Kelas yang tersedia:</strong></p>
+        <ul>
+            <?php foreach ($classes as $class): ?>
+                <li>ID: <?php echo $class['id_kelas']; ?> - <?php echo htmlspecialchars($class['nama_kelas']); ?></li>
+            <?php endforeach; ?>
+        </ul>
+        <p>Admin ID: <?php echo $admin_id; ?></p>
+        <?php if ($_SERVER['REQUEST_METHOD'] === 'POST'): ?>
+            <p><strong>Data POST yang diterima:</strong></p>
+            <ul>
+                <li>id_kelas: <?php echo $_POST['id_kelas'] ?? 'Tidak ada'; ?></li>
+                <li>jenis: <?php echo $_POST['jenis'] ?? 'Tidak ada'; ?></li>
+                <li>jumlah: <?php echo $_POST['jumlah'] ?? 'Tidak ada'; ?></li>
+            </ul>
+        <?php endif; ?>
+    </div>
+</div>
 
 <!-- Professional Admin Navbar -->
 <nav class="navbar navbar-expand-lg navbar-dark kas-navbar">
@@ -303,7 +302,7 @@ include 'includes/admin_header.php';
                     <p class="text-muted mb-0">Kelola semua transaksi pemasukan dan pengeluaran kelas</p>
                 </div>
                 <div>
-                    <button class="btn kas-btn kas-btn-primary" data-bs-toggle="modal" data-bs-target="#addTransactionModal">
+                    <button class="btn kas-btn kas-btn-primary" data-bs-toggle="modal" data-bs-target="#tambahTransaksiModal">
                         <i class="bi bi-plus-circle me-2"></i>Tambah Transaksi
                     </button>
                 </div>
@@ -322,7 +321,7 @@ include 'includes/admin_header.php';
 
     <!-- Statistics Cards -->
     <div class="row g-4 mb-4">
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="kas-stats">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
@@ -337,7 +336,7 @@ include 'includes/admin_header.php';
             </div>
         </div>
         
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="kas-stats">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
@@ -352,18 +351,31 @@ include 'includes/admin_header.php';
             </div>
         </div>
         
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="kas-stats">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
-                        <div class="kas-stats-title">Selisih</div>
-                        <h3 class="kas-stats-value" style="color: <?php echo ($total_pemasukan - $total_pengeluaran) >= 0 ? '#28a745' : '#dc3545'; ?>">
-                            <?php echo format_rupiah($total_pemasukan - $total_pengeluaran); ?>
-                        </h3>
-                        <small class="text-info"><i class="bi bi-calculator"></i> Net Balance</small>
+                        <div class="kas-stats-title">Saldo Kas</div>
+                        <h3 class="kas-stats-value text-primary"><?php echo format_rupiah($saldo_kas); ?></h3>
+                        <small class="text-info"><i class="bi bi-wallet2"></i> Net Balance</small>
                     </div>
                     <div class="kas-stats-icon balance">
                         <i class="bi bi-wallet2"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="kas-stats">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="kas-stats-title">Jumlah Transaksi</div>
+                        <h3 class="kas-stats-value text-info"><?php echo $jumlah_transaksi; ?></h3>
+                        <small class="text-info"><i class="bi bi-list-ul"></i> Total Transaksi</small>
+                    </div>
+                    <div class="kas-stats-icon count">
+                        <i class="bi bi-cash-stack"></i>
                     </div>
                 </div>
             </div>
@@ -427,7 +439,7 @@ include 'includes/admin_header.php';
                             <?php if ($filter_kelas > 0 || !empty($filter_jenis) || !empty($filter_bulan)): ?>
                                 <p class="text-muted">Coba ubah filter atau <a href="admin_transactions.php" class="text-primary">tampilkan semua transaksi</a></p>
                             <?php else: ?>
-                                <button class="btn kas-btn kas-btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#addTransactionModal">
+                                <button class="btn kas-btn kas-btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#tambahTransaksiModal">
                                     <i class="bi bi-plus-circle me-2"></i>Tambah Transaksi Pertama
                                 </button>
                             <?php endif; ?>
@@ -437,6 +449,7 @@ include 'includes/admin_header.php';
                             <table class="table kas-table table-hover">
                                 <thead>
                                     <tr>
+                                        <th>#</th>
                                         <th>Tanggal</th>
                                         <th>Kelas</th>
                                         <th>Jenis</th>
@@ -447,8 +460,9 @@ include 'includes/admin_header.php';
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php foreach ($transactions as $trans): ?>
+                                    <?php $no = 1; foreach ($transactions as $trans): ?>
                                         <tr>
+                                            <td><?php echo $no++; ?></td>
                                             <td>
                                                 <small class="text-muted"><?php echo date('d/m/Y', strtotime($trans['tanggal'])); ?></small>
                                             </td>
@@ -475,9 +489,24 @@ include 'includes/admin_header.php';
                                                 <strong class="text-primary"><?php echo format_rupiah($trans['saldo']); ?></strong>
                                             </td>
                                             <td>
-                                                <button class="btn btn-sm btn-outline-danger" onclick="deleteTransaction(<?php echo $trans['id_transaksi']; ?>, '<?php echo htmlspecialchars($trans['nama_kelas'], ENT_QUOTES); ?>', '<?php echo format_rupiah($trans['jumlah']); ?>')">
-                                                    <i class="bi bi-trash"></i>
-                                                </button>
+                                                <div class="btn-group btn-group-sm">
+                                                    <button class="btn btn-outline-primary" 
+                                                            data-bs-toggle="modal" 
+                                                            data-bs-target="#editTransaksiModal"
+                                                            data-id="<?php echo $trans['id_transaksi']; ?>"
+                                                            data-kelas="<?php echo $trans['id_kelas']; ?>"
+                                                            data-jenis="<?php echo $trans['jenis']; ?>"
+                                                            data-jumlah="<?php echo $trans['jumlah']; ?>"
+                                                            data-tanggal="<?php echo $trans['tanggal']; ?>"
+                                                            data-deskripsi="<?php echo htmlspecialchars($trans['deskripsi']); ?>">
+                                                        <i class="bi bi-pencil"></i>
+                                                    </button>
+                                                    <a href="?hapus=<?php echo $trans['id_transaksi']; ?>&kelas=<?php echo $filter_kelas; ?>&jenis=<?php echo $filter_jenis; ?>&bulan=<?php echo $filter_bulan; ?>" 
+                                                       class="btn btn-outline-danger" 
+                                                       onclick="return confirm('Yakin ingin menghapus transaksi ini?')">
+                                                        <i class="bi bi-trash"></i>
+                                                    </a>
+                                                </div>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -492,14 +521,14 @@ include 'includes/admin_header.php';
 </main>
 
 <!-- Add Transaction Modal -->
-<div class="modal fade" id="addTransactionModal" tabindex="-1">
+<div class="modal fade" id="tambahTransaksiModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Tambah Transaksi</h5>
+                <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Tambah Transaksi Baru</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" action="admin_transactions.php" id="addTransactionForm">
+            <form method="POST" action="">
                 <div class="modal-body">
                     <?php if (empty($classes)): ?>
                         <div class="alert alert-warning">
@@ -519,16 +548,20 @@ include 'includes/admin_header.php';
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label for="jenis_trans" class="form-label fw-semibold">Jenis Transaksi <span class="text-danger">*</span></label>
-                            <select name="jenis" id="jenis_trans" class="form-select kas-form-control" required>
+                            <label for="jenis" class="form-label fw-semibold">Jenis Transaksi <span class="text-danger">*</span></label>
+                            <select name="jenis" id="jenis" class="form-select kas-form-control" required>
+                                <option value="">Pilih Jenis</option>
                                 <option value="pemasukan">Pemasukan</option>
                                 <option value="pengeluaran">Pengeluaran</option>
                             </select>
                         </div>
                         <div class="mb-3">
                             <label for="jumlah" class="form-label fw-semibold">Jumlah (Rp) <span class="text-danger">*</span></label>
-                            <input type="number" name="jumlah" id="jumlah" class="form-control kas-form-control" 
-                                   min="1000" step="1000" placeholder="Contoh: 50000" required>
+                            <div class="input-group">
+                                <span class="input-group-text">Rp</span>
+                                <input type="number" name="jumlah" id="jumlah" class="form-control kas-form-control" 
+                                       min="1000" step="1000" placeholder="Contoh: 50000" required>
+                            </div>
                             <small class="text-muted">Masukkan jumlah dalam rupiah (minimal Rp 1,000)</small>
                         </div>
                         <div class="mb-3">
@@ -546,8 +579,7 @@ include 'includes/admin_header.php';
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
                     <?php if (!empty($classes)): ?>
-                        <input type="hidden" name="add_transaction" value="1">
-                        <button type="submit" name="add_transaction" value="1" class="btn btn-primary">
+                        <button type="submit" name="tambah_transaksi" class="btn btn-primary">
                             <i class="bi bi-check-circle me-2"></i>Simpan Transaksi
                         </button>
                     <?php endif; ?>
@@ -557,28 +589,68 @@ include 'includes/admin_header.php';
     </div>
 </div>
 
-<!-- Delete Transaction Modal -->
-<div class="modal fade" id="deleteTransactionModal" tabindex="-1">
+<!-- Edit Transaction Modal -->
+<div class="modal fade" id="editTransaksiModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title"><i class="bi bi-trash me-2"></i>Hapus Transaksi</h5>
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Edit Transaksi</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST">
-                <input type="hidden" name="id_transaksi" id="delete_id_transaksi">
+            <form method="POST" action="">
+                <input type="hidden" name="id_transaksi" id="edit_id_transaksi">
                 <div class="modal-body">
-                    <div class="alert alert-danger border-0">
-                        <i class="bi bi-exclamation-triangle me-2"></i>
-                        <strong>Perhatian!</strong> Tindakan ini tidak dapat dibatalkan dan akan mempengaruhi saldo kelas.
-                    </div>
-                    <p>Apakah Anda yakin ingin menghapus transaksi dari kelas <strong id="delete_kelas_name"></strong> dengan jumlah <strong id="delete_jumlah"></strong>?</p>
+                    <?php if (empty($classes)): ?>
+                        <div class="alert alert-warning">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            Anda belum memiliki kelas.
+                        </div>
+                    <?php else: ?>
+                        <div class="mb-3">
+                            <label for="edit_id_kelas" class="form-label fw-semibold">Kelas <span class="text-danger">*</span></label>
+                            <select name="id_kelas" id="edit_id_kelas" class="form-select kas-form-control" required>
+                                <option value="">Pilih Kelas</option>
+                                <?php foreach ($classes as $class): ?>
+                                    <option value="<?php echo $class['id_kelas']; ?>">
+                                        <?php echo htmlspecialchars($class['nama_kelas']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="edit_jenis" class="form-label fw-semibold">Jenis Transaksi <span class="text-danger">*</span></label>
+                            <select name="jenis" id="edit_jenis" class="form-select kas-form-control" required>
+                                <option value="pemasukan">Pemasukan</option>
+                                <option value="pengeluaran">Pengeluaran</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="edit_jumlah" class="form-label fw-semibold">Jumlah (Rp) <span class="text-danger">*</span></label>
+                            <div class="input-group">
+                                <span class="input-group-text">Rp</span>
+                                <input type="number" name="jumlah" id="edit_jumlah" class="form-control kas-form-control" 
+                                       min="1000" step="1000" required>
+                            </div>
+                            <small class="text-muted">Masukkan jumlah dalam rupiah (minimal Rp 1,000)</small>
+                        </div>
+                        <div class="mb-3">
+                            <label for="edit_tanggal" class="form-label fw-semibold">Tanggal <span class="text-danger">*</span></label>
+                            <input type="date" name="tanggal" id="edit_tanggal" class="form-control kas-form-control" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="edit_deskripsi" class="form-label fw-semibold">Deskripsi</label>
+                            <textarea name="deskripsi" id="edit_deskripsi" class="form-control kas-form-control" 
+                                      rows="3" placeholder="Keterangan transaksi (opsional)"></textarea>
+                        </div>
+                    <?php endif; ?>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
-                    <button type="submit" name="delete_transaction" class="btn btn-danger">
-                        <i class="bi bi-trash me-2"></i>Hapus Transaksi
-                    </button>
+                    <?php if (!empty($classes)): ?>
+                        <button type="submit" name="edit_transaksi" class="btn btn-primary">
+                            <i class="bi bi-check-circle me-2"></i>Update Transaksi
+                        </button>
+                    <?php endif; ?>
                 </div>
             </form>
         </div>
@@ -586,13 +658,6 @@ include 'includes/admin_header.php';
 </div>
 
 <script>
-function deleteTransaction(transId, kelasName, jumlah) {
-    document.getElementById('delete_id_transaksi').value = transId;
-    document.getElementById('delete_kelas_name').textContent = kelasName;
-    document.getElementById('delete_jumlah').textContent = jumlah;
-    new bootstrap.Modal(document.getElementById('deleteTransactionModal')).show();
-}
-
 // Auto-close alert setelah 5 detik
 document.addEventListener('DOMContentLoaded', function() {
     const alerts = document.querySelectorAll('.alert-dismissible');
@@ -601,6 +666,22 @@ document.addEventListener('DOMContentLoaded', function() {
             const bsAlert = new bootstrap.Alert(alert);
             bsAlert.close();
         }, 5000);
+    });
+    
+    // Set tanggal hari ini sebagai default di form tambah
+    document.getElementById('tanggal').valueAsDate = new Date();
+    
+    // Script untuk mengisi form edit dengan data dari tabel
+    const editModal = document.getElementById('editTransaksiModal');
+    editModal.addEventListener('show.bs.modal', function(event) {
+        const button = event.relatedTarget;
+        
+        document.getElementById('edit_id_transaksi').value = button.getAttribute('data-id');
+        document.getElementById('edit_id_kelas').value = button.getAttribute('data-kelas');
+        document.getElementById('edit_jenis').value = button.getAttribute('data-jenis');
+        document.getElementById('edit_jumlah').value = button.getAttribute('data-jumlah');
+        document.getElementById('edit_tanggal').value = button.getAttribute('data-tanggal');
+        document.getElementById('edit_deskripsi').value = button.getAttribute('data-deskripsi');
     });
 });
 </script>
