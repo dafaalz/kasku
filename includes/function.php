@@ -7,8 +7,7 @@ if (session_status() == PHP_SESSION_NONE) {
  * Format number to Rupiah currency
  */
 function format_rupiah($angka) {
-    $rupiah = number_format($angka, 0, ',', '.');
-    return "Rp " . $rupiah;
+    return 'Rp ' . number_format($angka, 0, ',', '.');
 }
 
 /**
@@ -146,7 +145,7 @@ function time_elapsed_string($datetime, $full = false) {
     $diff->w = floor($diff->d / 7);
     $diff->d -= $diff->w * 7;
 
-    $string = array(
+    $string = [
         'y' => 'tahun',
         'm' => 'bulan',
         'w' => 'minggu',
@@ -154,19 +153,21 @@ function time_elapsed_string($datetime, $full = false) {
         'h' => 'jam',
         'i' => 'menit',
         's' => 'detik',
-    );
-    
-    foreach ($string as $k => &$v) {
+    ];
+
+    $result = [];
+
+    foreach ($string as $k => $v) {
         if ($diff->$k) {
-            $v = $diff->$k . ' ' . $v . ($diff->$k > 1 ? '' : '');
-        } else {
-            unset($string[$k]);
+            $result[] = $diff->$k . ' ' . $v;
         }
     }
 
-    if (!$full) $string = array_slice($string, 0, 1);
-    return $string ? implode(', ', $string) . ' yang lalu' : 'baru saja';
+    if (!$full) $result = array_slice($result, 0, 1);
+
+    return $result ? implode(', ', $result) . ' yang lalu' : 'baru saja';
 }
+
 
 /**
  * Validate class code format

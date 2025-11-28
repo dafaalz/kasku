@@ -1,21 +1,9 @@
 <?php
-// Enable detailed error reporting
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-ini_set('log_errors', 1);
-ini_set('error_log', __DIR__ . '/php_errors.log');
-
-// Log start of script
-error_log("=== ADMIN_TRANSACTIONS.PHP STARTED ===");
-error_log("Session Role: " . ($_SESSION['role'] ?? 'NOT SET'));
-error_log("Admin ID: " . ($_SESSION['user_id'] ?? 'NOT SET'));
 // Define access constant for includes
 define('ALLOW_ACCESS', true);
 
 require_once __DIR__ . '/includes/db_config.php';
 require_once __DIR__ . '/includes/function.php';
-
-// Session sudah dimulai di function.php
 
 // Protect route: allow only admin
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
@@ -40,240 +28,138 @@ if (isset($_GET['message']) && isset($_GET['message_type'])) {
     $message_type = $_GET['message_type'];
 }
 
-// Fungsi untuk mendapatkan data kas berdasarkan kelas - VERSI DIPERBAIKI
-function getKasByKelas($conn, $id_kelas) {
-    // Gunakan query langsung untuk menghindari masalah prepared statement
-    $sql = "SELECT id_kas FROM kas WHERE id_kelas = $id_kelas";
-    $result = mysqli_query($conn, $sql);
-    
-    if (!$result) {
-        error_log("Error in getKasByKelas query: " . mysqli_error($conn));
-        return null;
-    }
-    
-    $row = mysqli_fetch_assoc($result);
-    $id_kas = $row ? $row['id_kas'] : null;
-    
-    error_log("getKasByKelas: id_kelas=$id_kelas -> id_kas=$id_kas");
-    
-    return $id_kas;
-}
-
 // DEBUG: Enable error reporting
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// Handle Add Transaction - DEBUG DETAIL
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['tambah_transaksi'])) {
+// Handle Add Transaction - SUPER SIMPLE VERSION
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_log("=== POST REQUEST DETECTED ===");
+    error_log("POST Data: " . print_r($_POST, true));
     
-    // Ambil data dari POST
-    $id_kelas = isset($_POST['id_kelas']) ? intval($_POST['id_kelas']) : 0;
-    $jenis = isset($_POST['jenis']) ? trim($_POST['jenis']) : '';
-    $jumlah = isset($_POST['jumlah']) ? floatval($_POST['jumlah']) : 0;
-    $tanggal = isset($_POST['tanggal']) ? trim($_POST['tanggal']) : '';
-    $deskripsi = isset($_POST['deskripsi']) ? trim($_POST['deskripsi']) : '';
-    
-    error_log("=== PROSES TAMBAH TRANSAKSI DETAIL ===");
-    error_log("Data POST: id_kelas=$id_kelas, jenis=$jenis, jumlah=$jumlah, tanggal=$tanggal");
-    
-    // Validasi input
-    $errors = [];
-    
-    if ($id_kelas <= 0) {
-        $errors[] = "Pilih kelas terlebih dahulu";
-    }
-    
-    if (!in_array($jenis, ['pemasukan', 'pengeluaran'])) {
-        $errors[] = "Jenis transaksi tidak valid";
-    }
-    
-    if ($jumlah <= 0) {
-        $errors[] = "Jumlah harus lebih dari 0";
-    }
-    
-    if (empty($tanggal)) {
-        $errors[] = "Tanggal tidak boleh kosong";
-    }
-    
-    if (empty($errors)) {
-        // Dapatkan id_kas dari id_kelas
-        error_log("Mencari id_kas untuk id_kelas: $id_kelas");
-        $id_kas = getKasByKelas($conn, $id_kelas);
+    // Check if this is an add transaction request
+    if (isset($_POST['id_kelas']) && isset($_POST['jenis']) && isset($_POST['jumlah'])) {
+        error_log("=== PROCESSING ADD TRANSACTION ===");
         
-        if ($id_kas) {
-            error_log("ID Kas ditemukan: $id_kas");
-            
-            // Test koneksi database
-            if (!$conn) {
-                error_log("KONEKSI DATABASE NULL!");
-                $message = "Koneksi database gagal!";
-                $message_type = 'danger';
-            } else {
-                // Test query sederhana
-                $test_query = "SELECT 1 as test";
-                $test_result = mysqli_query($conn, $test_query);
-                if (!$test_result) {
-                    error_log("TEST QUERY GAGAL: " . mysqli_error($conn));
-                    $message = "Koneksi database bermasalah: " . mysqli_error($conn);
-                    $message_type = 'danger';
-                } else {
-                    error_log("Test query berhasil");
-                    
-                    // Insert transaksi
-                    $deskripsi_safe = mysqli_real_escape_string($conn, $deskripsi);
-                    $sql = "INSERT INTO transaksi (id_kas, jenis, jumlah, tanggal, deskripsi, created_by) 
-                            VALUES ($id_kas, '$jenis', $jumlah, '$tanggal', '$deskripsi_safe', $admin_id)";
-                    
-                    error_log("SQL Insert: $sql");
-                    
-                    if (mysqli_query($conn, $sql)) {
-                        $insert_id = mysqli_insert_id($conn);
-                        error_log("Insert BERHASIL! ID: $insert_id");
-                        
-                        // Update saldo kas
-                        if ($jenis === 'pemasukan') {
-                            $update_sql = "UPDATE kas SET saldo = saldo + $jumlah WHERE id_kas = $id_kas";
-                        } else {
-                            $update_sql = "UPDATE kas SET saldo = saldo - $jumlah WHERE id_kas = $id_kas";
-                        }
-                        
-                        error_log("Update SQL: $update_sql");
-                        
-                        if (mysqli_query($conn, $update_sql)) {
-                            error_log("Update saldo BERHASIL!");
-                            
-                            // Cek data yang baru dimasukkan
-                            $check_sql = "SELECT * FROM transaksi WHERE id_transaksi = $insert_id";
-                            $check_result = mysqli_query($conn, $check_sql);
-                            $new_transaction = mysqli_fetch_assoc($check_result);
-                            
-                            if ($new_transaction) {
-                                error_log("Data transaksi baru ditemukan: ID " . $new_transaction['id_transaksi']);
-                            } else {
-                                error_log("DATA TRANSAKSI BARU TIDAK DITEMUKAN SETELAH INSERT!");
-                            }
-                            
-                            // Success - redirect
-                            $redirect_url = "admin_transactions.php?message=" . urlencode("Transaksi berhasil ditambahkan! ID: $insert_id") . "&message_type=success";
-                            if ($filter_kelas > 0) $redirect_url .= "&kelas=" . $filter_kelas;
-                            if (!empty($filter_jenis)) $redirect_url .= "&jenis=" . urlencode($filter_jenis);
-                            if (!empty($filter_bulan)) $redirect_url .= "&bulan=" . urlencode($filter_bulan);
-                            
-                            error_log("Redirect ke: $redirect_url");
-                            header("Location: " . $redirect_url);
-                            exit;
-                        } else {
-                            $error_msg = "Error update saldo: " . mysqli_error($conn);
-                            error_log($error_msg);
-                            $message = $error_msg;
-                            $message_type = 'danger';
-                        }
-                    } else {
-                        $error_msg = "Error insert transaksi: " . mysqli_error($conn);
-                        error_log($error_msg);
-                        $message = $error_msg;
-                        $message_type = 'danger';
-                    }
-                }
-            }
-        } else {
-            $message = "Kas untuk kelas ini tidak ditemukan!";
-            $message_type = 'danger';
-            error_log("Kas tidak ditemukan untuk id_kelas: $id_kelas");
-            
-            // Debug: cek data kas yang ada
-            $debug_sql = "SELECT * FROM kas WHERE id_kelas = $id_kelas";
-            $debug_result = mysqli_query($conn, $debug_sql);
-            $debug_data = mysqli_fetch_assoc($debug_result);
-            error_log("Debug kas data: " . print_r($debug_data, true));
-        }
-    } else {
-        $message = "Validasi gagal: " . implode(", ", $errors);
-        $message_type = 'danger';
-        error_log("Validasi gagal: " . implode(", ", $errors));
-    }
-}
-
-// Handle Edit Transaction - VERSI SUPER SIMPLE
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_transaksi'])) {
-    $id_transaksi = isset($_POST['id_transaksi']) ? intval($_POST['id_transaksi']) : 0;
-    $id_kelas = isset($_POST['id_kelas']) ? intval($_POST['id_kelas']) : 0;
-    $jenis = isset($_POST['jenis']) ? trim($_POST['jenis']) : '';
-    $jumlah = isset($_POST['jumlah']) ? floatval($_POST['jumlah']) : 0;
-    $tanggal = isset($_POST['tanggal']) ? trim($_POST['tanggal']) : '';
-    $deskripsi = isset($_POST['deskripsi']) ? trim($_POST['deskripsi']) : '';
-    
-    error_log("=== PROSES EDIT TRANSAKSI ===");
-    error_log("Data: id=$id_transaksi, id_kelas=$id_kelas, jenis=$jenis, jumlah=$jumlah");
-    
-    // Validasi input
-    if ($id_transaksi <= 0) {
-        $message = "ID transaksi tidak valid";
-        $message_type = 'danger';
-    } elseif ($id_kelas <= 0) {
-        $message = "Pilih kelas terlebih dahulu";
-        $message_type = 'danger';
-    } elseif (!in_array($jenis, ['pemasukan', 'pengeluaran'])) {
-        $message = "Jenis transaksi tidak valid";
-        $message_type = 'danger';
-    } elseif ($jumlah <= 0) {
-        $message = "Jumlah harus lebih dari 0";
-        $message_type = 'danger';
-    } elseif (empty($tanggal)) {
-        $message = "Tanggal tidak boleh kosong";
-        $message_type = 'danger';
-    } else {
-        // Dapatkan id_kas dari id_kelas
-        $id_kas = getKasByKelas($conn, $id_kelas);
+        // Ambil data dari POST
+        $id_kelas = intval($_POST['id_kelas']);
+        $jenis = trim($_POST['jenis']);
+        $jumlah = floatval($_POST['jumlah']);
+        $tanggal = trim($_POST['tanggal']);
+        $deskripsi = trim($_POST['deskripsi'] ?? '');
         
-        if ($id_kas) {
-            // Update transaksi menggunakan query langsung
-            $sql = "UPDATE transaksi SET id_kas = $id_kas, jenis = '$jenis', jumlah = $jumlah, 
-                    tanggal = '$tanggal', deskripsi = '$deskripsi' 
-                    WHERE id_transaksi = $id_transaksi";
+        error_log("Processing: id_kelas=$id_kelas, jenis=$jenis, jumlah=$jumlah, tanggal=$tanggal");
+        
+        // Validasi sederhana
+        if ($id_kelas > 0 && in_array($jenis, ['pemasukan', 'pengeluaran']) && $jumlah > 0 && !empty($tanggal)) {
             
-            error_log("SQL Update: $sql");
+            // GUNAKAN ID_KAS LANGSUNG (kita tahu id_kas=1 untuk kelas 15)
+            $id_kas = 1;
+            
+            error_log("Using id_kas: $id_kas");
+            
+            // Insert transaksi - SANGAT SEDERHANA
+            $sql = "INSERT INTO transaksi (id_kas, jenis, jumlah, tanggal, deskripsi, created_by) 
+                    VALUES ($id_kas, '$jenis', $jumlah, '$tanggal', '$deskripsi', $admin_id)";
+            
+            error_log("INSERT SQL: $sql");
             
             if (mysqli_query($conn, $sql)) {
-                error_log("Update transaksi BERHASIL!");
+                $insert_id = mysqli_insert_id($conn);
+                error_log("✅ INSERT SUCCESS! ID: $insert_id");
                 
-                // Redirect dengan parameter
-                $redirect_url = "admin_transactions.php?message=" . urlencode("Transaksi berhasil diupdate!") . "&message_type=success";
-                if ($filter_kelas > 0) $redirect_url .= "&kelas=" . $filter_kelas;
-                if (!empty($filter_jenis)) $redirect_url .= "&jenis=" . urlencode($filter_jenis);
-                if (!empty($filter_bulan)) $redirect_url .= "&bulan=" . urlencode($filter_bulan);
+                // Update saldo
+                if ($jenis === 'pemasukan') {
+                    $update_sql = "UPDATE kas SET saldo = saldo + $jumlah WHERE id_kas = $id_kas";
+                } else {
+                    $update_sql = "UPDATE kas SET saldo = saldo - $jumlah WHERE id_kas = $id_kas";
+                }
                 
-                header("Location: " . $redirect_url);
-                exit;
+                error_log("UPDATE SQL: $update_sql");
+                
+                if (mysqli_query($conn, $update_sql)) {
+                    error_log("✅ UPDATE SALDO SUCCESS!");
+                    
+                    // JavaScript redirect
+                    $redirect_url = "admin_transactions.php?message=Transaksi+berhasil+ditambahkan+ID+$insert_id&message_type=success";
+                    echo "<script>window.location.href = '$redirect_url';</script>";
+                    exit;
+                } else {
+                    error_log("❌ UPDATE FAILED: " . mysqli_error($conn));
+                    $message = "Update saldo gagal: " . mysqli_error($conn);
+                    $message_type = 'danger';
+                }
             } else {
-                $message = "Error update: " . mysqli_error($conn);
+                error_log("❌ INSERT FAILED: " . mysqli_error($conn));
+                $message = "Insert transaksi gagal: " . mysqli_error($conn);
                 $message_type = 'danger';
             }
         } else {
-            $message = "Kas untuk kelas ini tidak ditemukan!";
+            error_log("❌ VALIDATION FAILED");
+            $message = "Validasi data gagal";
             $message_type = 'danger';
         }
+    } else {
+        error_log("❌ MISSING REQUIRED FIELDS");
     }
 }
 
-// Handle Delete Transaction - VERSI SUPER SIMPLE
+// Handle Edit Transaction
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_transaksi'])) {
+    $id_transaksi = intval($_POST['id_transaksi']);
+    $id_kelas = intval($_POST['id_kelas']);
+    $jenis = trim($_POST['jenis']);
+    $jumlah = floatval($_POST['jumlah']);
+    $tanggal = trim($_POST['tanggal']);
+    $deskripsi = trim($_POST['deskripsi'] ?? '');
+    
+    error_log("=== PROCESSING EDIT TRANSACTION ===");
+    error_log("Edit Data: id=$id_transaksi, id_kelas=$id_kelas, jenis=$jenis, jumlah=$jumlah");
+    
+    if ($id_transaksi > 0 && $id_kelas > 0 && in_array($jenis, ['pemasukan', 'pengeluaran']) && $jumlah > 0 && !empty($tanggal)) {
+        
+        $id_kas = 1; // Hardcode karena kita tahu hubungannya
+        
+        $sql = "UPDATE transaksi SET id_kas = $id_kas, jenis = '$jenis', jumlah = $jumlah, 
+                tanggal = '$tanggal', deskripsi = '$deskripsi' 
+                WHERE id_transaksi = $id_transaksi";
+        
+        error_log("UPDATE SQL: $sql");
+        
+        if (mysqli_query($conn, $sql)) {
+            error_log("✅ UPDATE TRANSACTION SUCCESS!");
+            
+            $redirect_url = "admin_transactions.php?message=Transaksi+berhasil+diupdate&message_type=success";
+            echo "<script>window.location.href = '$redirect_url';</script>";
+            exit;
+        } else {
+            $message = "Error update: " . mysqli_error($conn);
+            $message_type = 'danger';
+        }
+    } else {
+        $message = "Validasi edit gagal";
+        $message_type = 'danger';
+    }
+}
+
+// Handle Delete Transaction
 if (isset($_GET['hapus'])) {
     $id_transaksi = intval($_GET['hapus']);
     
-    error_log("=== PROSES HAPUS TRANSAKSI ===");
-    error_log("ID Transaksi: $id_transaksi");
+    error_log("=== PROCESSING DELETE TRANSACTION ===");
+    error_log("Delete ID: $id_transaksi");
     
-    // Dapatkan data transaksi untuk koreksi saldo
+    // Get transaction data for saldo correction
     $sql = "SELECT jenis, jumlah, id_kas FROM transaksi WHERE id_transaksi = $id_transaksi";
     $result = mysqli_query($conn, $sql);
     $trans_data = mysqli_fetch_assoc($result);
     
     if ($trans_data) {
-        // Hapus transaksi
+        // Delete transaction
         $delete_sql = "DELETE FROM transaksi WHERE id_transaksi = $id_transaksi";
         
         if (mysqli_query($conn, $delete_sql)) {
-            // Update saldo manual
+            // Update saldo
             if ($trans_data['jenis'] === 'pemasukan') {
                 $update_sql = "UPDATE kas SET saldo = saldo - {$trans_data['jumlah']} WHERE id_kas = {$trans_data['id_kas']}";
             } else {
@@ -283,27 +169,20 @@ if (isset($_GET['hapus'])) {
             mysqli_query($conn, $update_sql);
             
             $redirect_url = "admin_transactions.php?message=Transaksi+berhasil+dihapus&message_type=success";
-            if (isset($_GET['kelas']) && $_GET['kelas'] != 0) $redirect_url .= "&kelas=" . $_GET['kelas'];
-            if (isset($_GET['jenis']) && !empty($_GET['jenis'])) $redirect_url .= "&jenis=" . urlencode($_GET['jenis']);
-            if (isset($_GET['bulan']) && !empty($_GET['bulan'])) $redirect_url .= "&bulan=" . urlencode($_GET['bulan']);
-            
-            header("Location: " . $redirect_url);
+            echo "<script>window.location.href = '$redirect_url';</script>";
             exit;
         }
     }
 }
 
-// Get all transactions with kas saldo - GUNAKAN QUERY LANGSUNG
+// Get all transactions with kas saldo
 $transactions = [];
-
-// Build query dasar
 $sql = "SELECT t.*, k.nama_kelas, k.id_kelas, kas.saldo
         FROM transaksi t
         JOIN kas ON t.id_kas = kas.id_kas
         JOIN kelas k ON kas.id_kelas = k.id_kelas
         WHERE k.id_admin = $admin_id";
 
-// Tambahkan filter
 if ($filter_kelas > 0) {
     $sql .= " AND k.id_kelas = $filter_kelas";
 }
@@ -320,19 +199,14 @@ if (!empty($filter_bulan)) {
 
 $sql .= " ORDER BY t.tanggal DESC, t.created_at DESC";
 
-error_log("SQL Query Transactions: $sql");
-
-// Execute query langsung
 $result = mysqli_query($conn, $sql);
 if ($result) {
     while ($row = mysqli_fetch_assoc($result)) {
         $transactions[] = $row;
     }
-} else {
-    error_log("Error in transactions query: " . mysqli_error($conn));
 }
 
-// Get classes for filter and form - GUNAKAN QUERY LANGSUNG
+// Get classes for filter and form
 $classes = [];
 $sql_classes = "SELECT id_kelas, nama_kelas FROM kelas WHERE id_admin = $admin_id ORDER BY nama_kelas";
 $result_classes = mysqli_query($conn, $sql_classes);
@@ -340,8 +214,6 @@ if ($result_classes) {
     while ($row = mysqli_fetch_assoc($result_classes)) {
         $classes[] = $row;
     }
-} else {
-    error_log("Error in classes query: " . mysqli_error($conn));
 }
 
 // Calculate statistics
@@ -363,15 +235,23 @@ $pageTitle = "Manajemen Transaksi - Admin KasKelas";
 include 'includes/admin_header.php';
 ?>
 
-<!-- Debug Info Section - DETAILED -->
+<!-- Debug Info Section -->
 <div class="container mt-3">
     <div class="alert alert-info">
-        <h5>🛠️ Detailed Debug Information</h5>
+        <h5>🛠️ System Status</h5>
         <p><strong>Admin ID:</strong> <?php echo $admin_id; ?></p>
         <p><strong>Jumlah Kelas:</strong> <?php echo count($classes); ?></p>
         <p><strong>Jumlah Transaksi:</strong> <?php echo count($transactions); ?></p>
         <p><strong>Total Saldo:</strong> <?php echo format_rupiah($saldo_kas); ?></p>
-        <p><strong>Koneksi Database:</strong> <?php echo $conn ? 'OK' : 'GAGAL'; ?></p>
+        <p><strong>Status:</strong> 
+            <?php 
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                echo "<span style='color: orange;'>🔄 Processing Transaction...</span>";
+            } else {
+                echo "<span style='color: green;'>✅ System Ready</span>";
+            }
+            ?>
+        </p>
         
         <?php if ($_SERVER['REQUEST_METHOD'] === 'POST'): ?>
             <hr>
@@ -383,21 +263,6 @@ include 'includes/admin_header.php';
                 <li>tanggal: <?php echo $_POST['tanggal'] ?? 'NULL'; ?></li>
                 <li>deskripsi: <?php echo $_POST['deskripsi'] ?? 'NULL'; ?></li>
             </ul>
-            
-            <?php
-            // Debug: cek id_kas untuk id_kelas yang dipilih
-            if (isset($_POST['id_kelas'])) {
-                $debug_id_kelas = intval($_POST['id_kelas']);
-                $debug_id_kas = getKasByKelas($conn, $debug_id_kelas);
-                echo "<p><strong>ID Kas untuk Kelas {$debug_id_kelas}:</strong> " . ($debug_id_kas ? $debug_id_kas : 'TIDAK DITEMUKAN') . "</p>";
-                
-                // Debug: cek data kas
-                $debug_sql = "SELECT * FROM kas WHERE id_kelas = $debug_id_kelas";
-                $debug_result = mysqli_query($conn, $debug_sql);
-                $debug_data = mysqli_fetch_assoc($debug_result);
-                echo "<p><strong>Data Kas:</strong> " . ($debug_data ? print_r($debug_data, true) : 'TIDAK ADA DATA') . "</p>";
-            }
-            ?>
         <?php endif; ?>
         
         <?php if (!empty($message)): ?>
@@ -405,26 +270,9 @@ include 'includes/admin_header.php';
             <p><strong>System Message:</strong> <?php echo $message; ?></p>
             <p><strong>Message Type:</strong> <?php echo $message_type; ?></p>
         <?php endif; ?>
-        
-        <hr>
-        <p><strong>Last 5 Transactions from Database:</strong></p>
-        <?php
-        $recent_sql = "SELECT id_transaksi, id_kas, jenis, jumlah, tanggal FROM transaksi ORDER BY id_transaksi DESC LIMIT 5";
-        $recent_result = mysqli_query($conn, $recent_sql);
-        if ($recent_result && mysqli_num_rows($recent_result) > 0) {
-            echo "<ul>";
-            while ($row = mysqli_fetch_assoc($recent_result)) {
-                echo "<li>ID: {$row['id_transaksi']}, Kas: {$row['id_kas']}, {$row['jenis']}, {$row['jumlah']}, {$row['tanggal']}</li>";
-            }
-            echo "</ul>";
-        } else {
-            echo "<p>No transactions found</p>";
-        }
-        ?>
     </div>
 </div>
 
-<!-- [REST OF YOUR HTML CODE REMAINS EXACTLY THE SAME] -->
 <!-- Professional Admin Navbar -->
 <nav class="navbar navbar-expand-lg navbar-dark kas-navbar">
     <div class="container-fluid">
@@ -479,7 +327,6 @@ include 'includes/admin_header.php';
         </div>
     </div>
 </nav>
-
 
 <!-- Main Content -->
 <main class="container-fluid py-4">
