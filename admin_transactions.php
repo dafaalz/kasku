@@ -28,19 +28,10 @@ if (isset($_GET['message']) && isset($_GET['message_type'])) {
     $message_type = $_GET['message_type'];
 }
 
-// DEBUG: Enable error reporting
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
-// Handle Add Transaction - SUPER SIMPLE VERSION
+// Handle Add Transaction
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    error_log("=== POST REQUEST DETECTED ===");
-    error_log("POST Data: " . print_r($_POST, true));
-    
     // Check if this is an add transaction request
     if (isset($_POST['id_kelas']) && isset($_POST['jenis']) && isset($_POST['jumlah'])) {
-        error_log("=== PROCESSING ADD TRANSACTION ===");
-        
         // Ambil data dari POST
         $id_kelas = intval($_POST['id_kelas']);
         $jenis = trim($_POST['jenis']);
@@ -48,25 +39,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tanggal = trim($_POST['tanggal']);
         $deskripsi = trim($_POST['deskripsi'] ?? '');
         
-        error_log("Processing: id_kelas=$id_kelas, jenis=$jenis, jumlah=$jumlah, tanggal=$tanggal");
-        
         // Validasi sederhana
         if ($id_kelas > 0 && in_array($jenis, ['pemasukan', 'pengeluaran']) && $jumlah > 0 && !empty($tanggal)) {
             
             // GUNAKAN ID_KAS LANGSUNG (kita tahu id_kas=1 untuk kelas 15)
             $id_kas = 1;
             
-            error_log("Using id_kas: $id_kas");
-            
-            // Insert transaksi - SANGAT SEDERHANA
+            // Insert transaksi
             $sql = "INSERT INTO transaksi (id_kas, jenis, jumlah, tanggal, deskripsi, created_by) 
                     VALUES ($id_kas, '$jenis', $jumlah, '$tanggal', '$deskripsi', $admin_id)";
             
-            error_log("INSERT SQL: $sql");
-            
             if (mysqli_query($conn, $sql)) {
                 $insert_id = mysqli_insert_id($conn);
-                error_log("✅ INSERT SUCCESS! ID: $insert_id");
                 
                 // Update saldo
                 if ($jenis === 'pemasukan') {
@@ -75,32 +59,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $update_sql = "UPDATE kas SET saldo = saldo - $jumlah WHERE id_kas = $id_kas";
                 }
                 
-                error_log("UPDATE SQL: $update_sql");
-                
                 if (mysqli_query($conn, $update_sql)) {
-                    error_log("✅ UPDATE SALDO SUCCESS!");
-                    
                     // JavaScript redirect
-                    $redirect_url = "admin_transactions.php?message=Transaksi+berhasil+ditambahkan+ID+$insert_id&message_type=success";
+                    $redirect_url = "admin_transactions.php?message=Transaksi+berhasil+ditambahkan&message_type=success";
                     echo "<script>window.location.href = '$redirect_url';</script>";
                     exit;
                 } else {
-                    error_log("❌ UPDATE FAILED: " . mysqli_error($conn));
                     $message = "Update saldo gagal: " . mysqli_error($conn);
                     $message_type = 'danger';
                 }
             } else {
-                error_log("❌ INSERT FAILED: " . mysqli_error($conn));
                 $message = "Insert transaksi gagal: " . mysqli_error($conn);
                 $message_type = 'danger';
             }
         } else {
-            error_log("❌ VALIDATION FAILED");
             $message = "Validasi data gagal";
             $message_type = 'danger';
         }
-    } else {
-        error_log("❌ MISSING REQUIRED FIELDS");
     }
 }
 
@@ -113,9 +88,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_transaksi'])) {
     $tanggal = trim($_POST['tanggal']);
     $deskripsi = trim($_POST['deskripsi'] ?? '');
     
-    error_log("=== PROCESSING EDIT TRANSACTION ===");
-    error_log("Edit Data: id=$id_transaksi, id_kelas=$id_kelas, jenis=$jenis, jumlah=$jumlah");
-    
     if ($id_transaksi > 0 && $id_kelas > 0 && in_array($jenis, ['pemasukan', 'pengeluaran']) && $jumlah > 0 && !empty($tanggal)) {
         
         $id_kas = 1; // Hardcode karena kita tahu hubungannya
@@ -124,11 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_transaksi'])) {
                 tanggal = '$tanggal', deskripsi = '$deskripsi' 
                 WHERE id_transaksi = $id_transaksi";
         
-        error_log("UPDATE SQL: $sql");
-        
         if (mysqli_query($conn, $sql)) {
-            error_log("✅ UPDATE TRANSACTION SUCCESS!");
-            
             $redirect_url = "admin_transactions.php?message=Transaksi+berhasil+diupdate&message_type=success";
             echo "<script>window.location.href = '$redirect_url';</script>";
             exit;
@@ -145,9 +113,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_transaksi'])) {
 // Handle Delete Transaction
 if (isset($_GET['hapus'])) {
     $id_transaksi = intval($_GET['hapus']);
-    
-    error_log("=== PROCESSING DELETE TRANSACTION ===");
-    error_log("Delete ID: $id_transaksi");
     
     // Get transaction data for saldo correction
     $sql = "SELECT jenis, jumlah, id_kas FROM transaksi WHERE id_transaksi = $id_transaksi";
@@ -234,44 +199,6 @@ $jumlah_transaksi = count($transactions);
 $pageTitle = "Manajemen Transaksi - Admin KasKelas";
 include 'includes/admin_header.php';
 ?>
-
-<!-- Debug Info Section -->
-<div class="container mt-3">
-    <div class="alert alert-info">
-        <h5>🛠️ System Status</h5>
-        <p><strong>Admin ID:</strong> <?php echo $admin_id; ?></p>
-        <p><strong>Jumlah Kelas:</strong> <?php echo count($classes); ?></p>
-        <p><strong>Jumlah Transaksi:</strong> <?php echo count($transactions); ?></p>
-        <p><strong>Total Saldo:</strong> <?php echo format_rupiah($saldo_kas); ?></p>
-        <p><strong>Status:</strong> 
-            <?php 
-            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-                echo "<span style='color: orange;'>🔄 Processing Transaction...</span>";
-            } else {
-                echo "<span style='color: green;'>✅ System Ready</span>";
-            }
-            ?>
-        </p>
-        
-        <?php if ($_SERVER['REQUEST_METHOD'] === 'POST'): ?>
-            <hr>
-            <p><strong>POST Data Received:</strong></p>
-            <ul>
-                <li>id_kelas: <?php echo $_POST['id_kelas'] ?? 'NULL'; ?></li>
-                <li>jenis: <?php echo $_POST['jenis'] ?? 'NULL'; ?></li>
-                <li>jumlah: <?php echo $_POST['jumlah'] ?? 'NULL'; ?></li>
-                <li>tanggal: <?php echo $_POST['tanggal'] ?? 'NULL'; ?></li>
-                <li>deskripsi: <?php echo $_POST['deskripsi'] ?? 'NULL'; ?></li>
-            </ul>
-        <?php endif; ?>
-        
-        <?php if (!empty($message)): ?>
-            <hr>
-            <p><strong>System Message:</strong> <?php echo $message; ?></p>
-            <p><strong>Message Type:</strong> <?php echo $message_type; ?></p>
-        <?php endif; ?>
-    </div>
-</div>
 
 <!-- Professional Admin Navbar -->
 <nav class="navbar navbar-expand-lg navbar-dark kas-navbar">
